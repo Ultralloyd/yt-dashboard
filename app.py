@@ -613,26 +613,28 @@ if not st.session_state['authenticated']:
 with st.sidebar:
     st.markdown("## ⚙️ Configuration")
 
-    yt_api_key     = st.text_input("YouTube Data API Key", type="password",
-                                    value=_get_secret("YT_API_KEY"), placeholder="AIza...")
-    claude_api_key = st.text_input("Claude API Key", type="password",
-                                    value=_get_secret("CLAUDE_API_KEY"), placeholder="sk-ant-...")
+    # API keys loaded from secrets (hidden from UI)
+    yt_api_key            = _get_secret("YT_API_KEY")
+    claude_api_key        = _get_secret("CLAUDE_API_KEY")
+    dataforseo_login      = _get_secret("DATAFORSEO_LOGIN")
+    dataforseo_password   = _get_secret("DATAFORSEO_PASSWORD")
+    socialblade_client_id = _get_secret("SOCIALBLADE_CLIENT_ID")
+    socialblade_token     = _get_secret("SOCIALBLADE_TOKEN")
 
-    st.markdown("---")
-    st.markdown("### 🔍 Competitor Data *(optional)*")
-    dataforseo_login    = st.text_input("DataForSEO Login (email)",
-                                         value=_get_secret("DATAFORSEO_LOGIN"), placeholder="you@email.com")
-    dataforseo_password = st.text_input("DataForSEO Password", type="password",
-                                         value=_get_secret("DATAFORSEO_PASSWORD"), placeholder="password")
-    st.caption("Adds real competitor channel metrics. Sign up at dataforseo.com — pay-as-you-go, ~$0.60/1000 searches.")
+    # Toggle optional data sources
+    enable_competitor = st.checkbox("🔍 Competitor Data (DataForSEO)",
+                                    value=st.session_state.get('enable_competitor', bool(dataforseo_login)),
+                                    help="Adds real competitor channel metrics via DataForSEO")
+    enable_growth = st.checkbox("📈 Growth Intelligence (SocialBlade)",
+                                 value=st.session_state.get('enable_growth', bool(socialblade_client_id)),
+                                 help="Subscriber trajectory, growth grade, earnings estimates via SocialBlade")
 
-    st.markdown("---")
-    st.markdown("### 📈 Growth Intelligence *(optional)*")
-    socialblade_client_id = st.text_input("SocialBlade Client ID", type="password",
-                                           value=_get_secret("SOCIALBLADE_CLIENT_ID"), placeholder="client id")
-    socialblade_token     = st.text_input("SocialBlade Token", type="password",
-                                           value=_get_secret("SOCIALBLADE_TOKEN"), placeholder="token")
-    st.caption("Subscriber trajectory, growth grade, earnings estimates. Get API keys at socialblade.com/developers")
+    if not enable_competitor:
+        dataforseo_login = ""
+        dataforseo_password = ""
+    if not enable_growth:
+        socialblade_client_id = ""
+        socialblade_token = ""
 
     st.markdown("---")
     st.markdown("### 📺 Channels to Analyze")
