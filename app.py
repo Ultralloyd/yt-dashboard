@@ -1308,7 +1308,7 @@ def get_instagram_profile_data(handle, _rapidapi_key_hash=""):
             # Step 2: Get full profile by user ID
             if user_id:
                 r2 = requests.get(
-                    f"https://{rapidapi_host}/user_info",
+                    f"https://{rapidapi_host}/profile",
                     params={"user_id": str(user_id)},
                     headers=rap_headers,
                     timeout=15
