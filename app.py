@@ -1208,14 +1208,50 @@ def get_tiktok_profile_data(handle):
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_instagram_profile_data(handle):
     """
-    Fetch Instagram profile data from the public page.
-    Tries multiple extraction strategies for the embedded JSON data.
-    For production at scale, integrate with Apify or PhantomBuster.
-    Returns dict with followers/following/posts/bio or None.
+    Fetch Instagram profile data.
+    Strategy 1: RapidAPI Instagram scraper (if RAPIDAPI_KEY secret is set)
+    Strategy 2-4: Direct scraping fallbacks (work locally, often blocked on cloud)
+    Returns dict with followers/following/posts/bio or a status dict on failure.
     """
     handle = handle.strip().lstrip('@')
     if not handle:
         return None
+
+    # ── Strategy 1: RapidAPI Instagram scraper (reliable from cloud) ──
+    rapidapi_key = _get_secret("RAPIDAPI_KEY")
+    if rapidapi_key:
+        try:
+            api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/info"
+            r = requests.get(
+                api_url,
+                params={"username_or_id_or_url": handle},
+                headers={
+                    "x-rapidapi-key": rapidapi_key,
+                    "x-rapidapi-host": "instagram-scraper-api2.p.rapidapi.com"
+                },
+                timeout=15
+            )
+            if r.status_code == 200:
+                data = r.json().get('data', {})
+                if data:
+                    return {
+                        'username':     data.get('username', handle),
+                        'full_name':    data.get('full_name', ''),
+                        'bio':          data.get('biography', ''),
+                        'verified':     data.get('is_verified', False),
+                        'is_business':  data.get('is_business', False),
+                        'category':     data.get('category', ''),
+                        'followers':    data.get('follower_count', 0),
+                        'following':    data.get('following_count', 0),
+                        'posts':        data.get('media_count', 0),
+                        'profile_pic':  data.get('profile_pic_url_hd', '') or data.get('profile_pic_url', ''),
+                        'external_url': data.get('external_url', ''),
+                        'is_private':   data.get('is_private', False),
+                        'recent_posts': [],
+                        '_source':      'rapidapi'
+                    }
+        except Exception:
+            pass
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -1229,7 +1265,7 @@ def get_instagram_profile_data(handle):
         'Sec-Fetch-Site': 'none',
     }
 
-    # Strategy 1: Try the web profile info API endpoint
+    # ── Strategy 2: Instagram web profile API endpoint ──
     try:
         api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={handle}"
         api_headers = {**headers, 'X-IG-App-ID': '936619743392459'}
@@ -1251,13 +1287,12 @@ def get_instagram_profile_data(handle):
                     'profile_pic':  user.get('profile_pic_url_hd', ''),
                     'external_url': user.get('external_url', ''),
                     'is_private':   user.get('is_private', False),
-                    # Extract recent post engagement if available
                     'recent_posts': _extract_ig_recent_posts(user),
                 }
     except Exception:
         pass
 
-    # Strategy 2: Try the public page with ?__a=1&__d=dis
+    # ── Strategy 3: Public page ?__a=1&__d=dis ──
     try:
         url = f"https://www.instagram.com/{handle}/?__a=1&__d=dis"
         r = requests.get(url, headers=headers, timeout=15)
@@ -1285,65 +1320,68 @@ def get_instagram_profile_data(handle):
     except Exception:
         pass
 
-    # Strategy 3: Scrape the HTML page for embedded JSON
+    # ── Strategy 4: HTML scrape with og:meta fallback ──
     try:
         url = f"https://www.instagram.com/{handle}/"
         r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code != 200:
-            return None
-        # Look for window._sharedData or similar embedded JSON
-        match = re.search(r'window\._sharedData\s*=\s*({.+?});</script>', r.text)
-        if match:
-            blob = json.loads(match.group(1))
-            user = (blob.get('entry_data', {})
-                       .get('ProfilePage', [{}])[0]
-                       .get('graphql', {})
-                       .get('user', {}))
-            if user:
-                return {
-                    'username':     user.get('username', handle),
-                    'full_name':    user.get('full_name', ''),
-                    'bio':          user.get('biography', ''),
-                    'verified':     user.get('is_verified', False),
-                    'is_business':  user.get('is_business_account', False),
-                    'category':     user.get('category_name', ''),
-                    'followers':    user.get('edge_followed_by', {}).get('count', 0),
-                    'following':    user.get('edge_follow', {}).get('count', 0),
-                    'posts':        user.get('edge_owner_to_timeline_media', {}).get('count', 0),
-                    'profile_pic':  user.get('profile_pic_url_hd', ''),
-                    'external_url': user.get('external_url', ''),
-                    'is_private':   user.get('is_private', False),
-                    'recent_posts': _extract_ig_recent_posts(user),
-                }
-        # Look for meta tag og:description as fallback for basic follower count
-        og_match = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
-        if og_match:
-            desc = og_match.group(1)
-            nums = re.findall(r'([\d,.]+[KMB]?)\s+(Followers|Following|Posts)', desc, re.IGNORECASE)
-            if nums:
-                parsed = {}
-                for val, label in nums:
-                    parsed[label.lower()] = _parse_ig_count(val)
-                return {
-                    'username':     handle,
-                    'full_name':    '',
-                    'bio':          '',
-                    'verified':     False,
-                    'is_business':  False,
-                    'category':     '',
-                    'followers':    parsed.get('followers', 0),
-                    'following':    parsed.get('following', 0),
-                    'posts':        parsed.get('posts', 0),
-                    'profile_pic':  '',
-                    'external_url': '',
-                    'is_private':   False,
-                    'recent_posts': [],
-                    '_source':      'og_meta_fallback'
-                }
+        if r.status_code == 200:
+            match = re.search(r'window\._sharedData\s*=\s*({.+?});</script>', r.text)
+            if match:
+                blob = json.loads(match.group(1))
+                user = (blob.get('entry_data', {})
+                           .get('ProfilePage', [{}])[0]
+                           .get('graphql', {})
+                           .get('user', {}))
+                if user:
+                    return {
+                        'username':     user.get('username', handle),
+                        'full_name':    user.get('full_name', ''),
+                        'bio':          user.get('biography', ''),
+                        'verified':     user.get('is_verified', False),
+                        'is_business':  user.get('is_business_account', False),
+                        'category':     user.get('category_name', ''),
+                        'followers':    user.get('edge_followed_by', {}).get('count', 0),
+                        'following':    user.get('edge_follow', {}).get('count', 0),
+                        'posts':        user.get('edge_owner_to_timeline_media', {}).get('count', 0),
+                        'profile_pic':  user.get('profile_pic_url_hd', ''),
+                        'external_url': user.get('external_url', ''),
+                        'is_private':   user.get('is_private', False),
+                        'recent_posts': _extract_ig_recent_posts(user),
+                    }
+            og_match = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
+            if og_match:
+                desc = og_match.group(1)
+                nums = re.findall(r'([\d,.]+[KMB]?)\s+(Followers|Following|Posts)', desc, re.IGNORECASE)
+                if nums:
+                    parsed = {}
+                    for val, label in nums:
+                        parsed[label.lower()] = _parse_ig_count(val)
+                    return {
+                        'username':     handle,
+                        'full_name':    '',
+                        'bio':          '',
+                        'verified':     False,
+                        'is_business':  False,
+                        'category':     '',
+                        'followers':    parsed.get('followers', 0),
+                        'following':    parsed.get('following', 0),
+                        'posts':        parsed.get('posts', 0),
+                        'profile_pic':  '',
+                        'external_url': '',
+                        'is_private':   False,
+                        'recent_posts': [],
+                        '_source':      'og_meta_fallback'
+                    }
     except Exception:
         pass
 
-    return None
+    # All strategies failed — return status dict so Claude knows why
+    return {
+        'status': 'fetch_failed',
+        'handle': handle,
+        'reason': 'Instagram blocked server-side scraping. The account likely exists but could not be reached. '
+                  'Do NOT recommend creating an Instagram — assume the account exists at @' + handle + '.',
+    }
 
 
 def _parse_ig_count(val):
@@ -3718,13 +3756,21 @@ with main_tab_social:
     </div>""", unsafe_allow_html=True)
 
             with p3:
-                if instagram_profile:
+                ig_ok = instagram_profile and instagram_profile.get('status') != 'fetch_failed'
+                if ig_ok:
                     ig = instagram_profile
                     st.markdown(f"""
     <div style="border-top:2px solid #ec4899;border-bottom:1px solid #831843;padding:0.8rem 1rem;background:transparent;position:relative;">
       <div style="font-family:'Orbitron',monospace;font-size:0.6rem;color:#ec4899;letter-spacing:0.15em;margin-bottom:6px;">📸 INSTAGRAM</div>
       <div style="font-family:'Share Tech Mono',monospace;font-size:1.1rem;color:#ec4899;text-shadow:0 0 10px rgba(236,72,153,0.4);white-space:nowrap;">{fmt_num(ig['followers'])} <span style="font-size:0.6rem;color:#5a8a82;">FOLLOWERS</span></div>
       <div style="margin-top:6px;font-size:0.7rem;color:#5a8a82;">{ig['posts']:,} posts{' · ✓ VERIFIED' if ig.get('verified') else ''}{' · 🏢 BIZ' if ig.get('is_business') else ''}</div>
+    </div>""", unsafe_allow_html=True)
+                elif instagram_profile and instagram_profile.get('status') == 'fetch_failed':
+                    st.markdown(f"""
+    <div style="border-top:2px solid #ec4899;border-bottom:1px solid #831843;padding:0.8rem 1rem;background:transparent;opacity:0.7;">
+      <div style="font-family:'Orbitron',monospace;font-size:0.6rem;color:#ec4899;letter-spacing:0.15em;margin-bottom:6px;">📸 INSTAGRAM</div>
+      <div style="font-size:0.75rem;color:#f59e0b;margin-top:8px;">@{instagram_profile['handle']} — data blocked by Instagram</div>
+      <div style="font-size:0.65rem;color:#5a8a82;margin-top:4px;">Add RAPIDAPI_KEY to secrets for reliable IG data</div>
     </div>""", unsafe_allow_html=True)
                 else:
                     st.markdown(f"""
