@@ -1217,39 +1217,82 @@ def get_instagram_profile_data(handle):
     if not handle:
         return None
 
-    # ── Strategy 1: RapidAPI Instagram scraper (reliable from cloud) ──
+    # ── Strategy 1: RapidAPI Instagram API (reliable from cloud) ──
     rapidapi_key = _get_secret("RAPIDAPI_KEY")
+    rapidapi_host = "instagram-api-fast-reliable-data-scraper.p.rapidapi.com"
     if rapidapi_key:
         try:
-            api_url = "https://instagram-scraper-api2.p.rapidapi.com/v1/info"
-            r = requests.get(
-                api_url,
-                params={"username_or_id_or_url": handle},
-                headers={
-                    "x-rapidapi-key": rapidapi_key,
-                    "x-rapidapi-host": "instagram-scraper-api2.p.rapidapi.com"
-                },
+            rap_headers = {
+                "x-rapidapi-key": rapidapi_key,
+                "x-rapidapi-host": rapidapi_host,
+                "Content-Type": "application/json"
+            }
+            # Step 1: Get user ID from username
+            r1 = requests.get(
+                f"https://{rapidapi_host}/user_id_by_username",
+                params={"username": handle},
+                headers=rap_headers,
                 timeout=15
             )
-            if r.status_code == 200:
-                data = r.json().get('data', {})
-                if data:
-                    return {
-                        'username':     data.get('username', handle),
-                        'full_name':    data.get('full_name', ''),
-                        'bio':          data.get('biography', ''),
-                        'verified':     data.get('is_verified', False),
-                        'is_business':  data.get('is_business', False),
-                        'category':     data.get('category', ''),
-                        'followers':    data.get('follower_count', 0),
-                        'following':    data.get('following_count', 0),
-                        'posts':        data.get('media_count', 0),
-                        'profile_pic':  data.get('profile_pic_url_hd', '') or data.get('profile_pic_url', ''),
-                        'external_url': data.get('external_url', ''),
-                        'is_private':   data.get('is_private', False),
-                        'recent_posts': [],
-                        '_source':      'rapidapi'
-                    }
+            if r1.status_code == 200:
+                id_data = r1.json()
+                user_id = id_data.get('user_id') or id_data.get('data', {}).get('user_id') or id_data.get('id')
+                # If the response has profile data directly, use it
+                if not user_id and isinstance(id_data, dict):
+                    # Some APIs return the full profile in one call
+                    for key in ('data', 'user', 'result'):
+                        blob = id_data.get(key, {})
+                        if isinstance(blob, dict) and blob.get('follower_count', blob.get('followers')):
+                            return {
+                                'username':     blob.get('username', handle),
+                                'full_name':    blob.get('full_name', ''),
+                                'bio':          blob.get('biography', blob.get('bio', '')),
+                                'verified':     blob.get('is_verified', False),
+                                'is_business':  blob.get('is_business_account', blob.get('is_business', False)),
+                                'category':     blob.get('category_name', blob.get('category', '')),
+                                'followers':    blob.get('follower_count', blob.get('followers', 0)),
+                                'following':    blob.get('following_count', blob.get('following', 0)),
+                                'posts':        blob.get('media_count', blob.get('posts', 0)),
+                                'profile_pic':  blob.get('profile_pic_url_hd', blob.get('profile_pic_url', '')),
+                                'external_url': blob.get('external_url', ''),
+                                'is_private':   blob.get('is_private', False),
+                                'recent_posts': [],
+                                '_source':      'rapidapi'
+                            }
+
+                # Step 2: Get full profile by user ID
+                if user_id:
+                    r2 = requests.get(
+                        f"https://{rapidapi_host}/user_info",
+                        params={"user_id": str(user_id)},
+                        headers=rap_headers,
+                        timeout=15
+                    )
+                    if r2.status_code == 200:
+                        info = r2.json()
+                        # Navigate into nested response — try common structures
+                        user = info
+                        for key in ('data', 'user', 'result'):
+                            if isinstance(user, dict) and key in user:
+                                user = user[key]
+                                break
+                        if isinstance(user, dict) and (user.get('follower_count') or user.get('followers') or user.get('username')):
+                            return {
+                                'username':     user.get('username', handle),
+                                'full_name':    user.get('full_name', ''),
+                                'bio':          user.get('biography', user.get('bio', '')),
+                                'verified':     user.get('is_verified', False),
+                                'is_business':  user.get('is_business_account', user.get('is_business', False)),
+                                'category':     user.get('category_name', user.get('category', '')),
+                                'followers':    user.get('follower_count', user.get('edge_followed_by', {}).get('count', 0)),
+                                'following':    user.get('following_count', user.get('edge_follow', {}).get('count', 0)),
+                                'posts':        user.get('media_count', user.get('edge_owner_to_timeline_media', {}).get('count', 0)),
+                                'profile_pic':  user.get('profile_pic_url_hd', user.get('profile_pic_url', '')),
+                                'external_url': user.get('external_url', ''),
+                                'is_private':   user.get('is_private', False),
+                                'recent_posts': [],
+                                '_source':      'rapidapi'
+                            }
         except Exception:
             pass
 
