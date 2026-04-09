@@ -1221,6 +1221,7 @@ def get_instagram_profile_data(handle, _rapidapi_key_hash=""):
     # ── Strategy 1: RapidAPI Instagram API (reliable from cloud) ──
     rapidapi_key = _get_secret("RAPIDAPI_KEY")
     rapidapi_host = "instagram-api-fast-reliable-data-scraper.p.rapidapi.com"
+    _rapidapi_debug = []  # collect debug info for display
     if rapidapi_key:
         try:
             rap_headers = {
@@ -1235,67 +1236,98 @@ def get_instagram_profile_data(handle, _rapidapi_key_hash=""):
                 headers=rap_headers,
                 timeout=15
             )
-            if r1.status_code == 200:
-                id_data = r1.json()
-                user_id = id_data.get('user_id') or id_data.get('data', {}).get('user_id') or id_data.get('id')
-                # If the response has profile data directly, use it
-                if not user_id and isinstance(id_data, dict):
-                    # Some APIs return the full profile in one call
-                    for key in ('data', 'user', 'result'):
-                        blob = id_data.get(key, {})
-                        if isinstance(blob, dict) and blob.get('follower_count', blob.get('followers')):
-                            return {
-                                'username':     blob.get('username', handle),
-                                'full_name':    blob.get('full_name', ''),
-                                'bio':          blob.get('biography', blob.get('bio', '')),
-                                'verified':     blob.get('is_verified', False),
-                                'is_business':  blob.get('is_business_account', blob.get('is_business', False)),
-                                'category':     blob.get('category_name', blob.get('category', '')),
-                                'followers':    blob.get('follower_count', blob.get('followers', 0)),
-                                'following':    blob.get('following_count', blob.get('following', 0)),
-                                'posts':        blob.get('media_count', blob.get('posts', 0)),
-                                'profile_pic':  blob.get('profile_pic_url_hd', blob.get('profile_pic_url', '')),
-                                'external_url': blob.get('external_url', ''),
-                                'is_private':   blob.get('is_private', False),
-                                'recent_posts': [],
-                                '_source':      'rapidapi'
-                            }
+            _rapidapi_debug.append(f"Step1 status={r1.status_code}")
+            id_data = r1.json() if r1.status_code == 200 else {}
+            _rapidapi_debug.append(f"Step1 keys={list(id_data.keys()) if isinstance(id_data, dict) else type(id_data)}")
 
-                # Step 2: Get full profile by user ID
-                if user_id:
-                    r2 = requests.get(
-                        f"https://{rapidapi_host}/user_info",
-                        params={"user_id": str(user_id)},
-                        headers=rap_headers,
-                        timeout=15
-                    )
-                    if r2.status_code == 200:
-                        info = r2.json()
-                        # Navigate into nested response — try common structures
-                        user = info
-                        for key in ('data', 'user', 'result'):
-                            if isinstance(user, dict) and key in user:
-                                user = user[key]
+            # Extract user_id — try every common key pattern
+            user_id = None
+            if isinstance(id_data, dict):
+                user_id = (id_data.get('user_id')
+                           or id_data.get('id')
+                           or id_data.get('pk')
+                           or id_data.get('pk_id'))
+                # Check nested under 'data', 'user', 'result'
+                if not user_id:
+                    for key in ('data', 'user', 'result'):
+                        sub = id_data.get(key)
+                        if isinstance(sub, dict):
+                            user_id = (sub.get('user_id') or sub.get('id')
+                                       or sub.get('pk') or sub.get('pk_id'))
+                            if user_id:
                                 break
-                        if isinstance(user, dict) and (user.get('follower_count') or user.get('followers') or user.get('username')):
-                            return {
-                                'username':     user.get('username', handle),
-                                'full_name':    user.get('full_name', ''),
-                                'bio':          user.get('biography', user.get('bio', '')),
-                                'verified':     user.get('is_verified', False),
-                                'is_business':  user.get('is_business_account', user.get('is_business', False)),
-                                'category':     user.get('category_name', user.get('category', '')),
-                                'followers':    user.get('follower_count', user.get('edge_followed_by', {}).get('count', 0)),
-                                'following':    user.get('following_count', user.get('edge_follow', {}).get('count', 0)),
-                                'posts':        user.get('media_count', user.get('edge_owner_to_timeline_media', {}).get('count', 0)),
-                                'profile_pic':  user.get('profile_pic_url_hd', user.get('profile_pic_url', '')),
-                                'external_url': user.get('external_url', ''),
-                                'is_private':   user.get('is_private', False),
-                                'recent_posts': [],
-                                '_source':      'rapidapi'
-                            }
-        except Exception:
-            pass
+
+            _rapidapi_debug.append(f"user_id={user_id}")
+
+            # Helper to extract profile from a dict with flexible field names
+            def _parse_ig_profile(d, src_handle):
+                if not isinstance(d, dict):
+                    return None
+                # Must have at least a username or follower count
+                if not (d.get('username') or d.get('follower_count') or d.get('followers')
+                        or d.get('edge_followed_by')):
+                    return None
+                fc = (d.get('follower_count') or d.get('followers')
+                      or (d.get('edge_followed_by', {}) or {}).get('count', 0))
+                fgc = (d.get('following_count') or d.get('following')
+                       or (d.get('edge_follow', {}) or {}).get('count', 0))
+                mc = (d.get('media_count') or d.get('posts')
+                      or (d.get('edge_owner_to_timeline_media', {}) or {}).get('count', 0))
+                return {
+                    'username':     d.get('username', src_handle),
+                    'full_name':    d.get('full_name', ''),
+                    'bio':          d.get('biography', d.get('bio', d.get('biography_with_entities', {}).get('raw_text', ''))),
+                    'verified':     d.get('is_verified', False),
+                    'is_business':  d.get('is_business_account', d.get('is_business', False)),
+                    'category':     d.get('category_name', d.get('category', '')),
+                    'followers':    int(fc) if fc else 0,
+                    'following':    int(fgc) if fgc else 0,
+                    'posts':        int(mc) if mc else 0,
+                    'profile_pic':  d.get('profile_pic_url_hd', d.get('profile_pic_url', '')),
+                    'external_url': d.get('external_url', ''),
+                    'is_private':   d.get('is_private', False),
+                    'recent_posts': [],
+                    '_source':      'rapidapi'
+                }
+
+            # Check if step 1 already returned full profile data
+            if isinstance(id_data, dict):
+                # Try top-level
+                result = _parse_ig_profile(id_data, handle)
+                if result and result['followers'] > 0:
+                    return result
+                # Try nested
+                for key in ('data', 'user', 'result'):
+                    sub = id_data.get(key)
+                    if isinstance(sub, dict):
+                        result = _parse_ig_profile(sub, handle)
+                        if result and result['followers'] > 0:
+                            return result
+
+            # Step 2: Get full profile by user ID
+            if user_id:
+                r2 = requests.get(
+                    f"https://{rapidapi_host}/user_info",
+                    params={"user_id": str(user_id)},
+                    headers=rap_headers,
+                    timeout=15
+                )
+                _rapidapi_debug.append(f"Step2 status={r2.status_code}")
+                if r2.status_code == 200:
+                    info = r2.json()
+                    _rapidapi_debug.append(f"Step2 keys={list(info.keys()) if isinstance(info, dict) else type(info)}")
+                    # Try top-level and nested
+                    for obj in [info] + [info.get(k) for k in ('data', 'user', 'result') if isinstance(info.get(k), dict)]:
+                        result = _parse_ig_profile(obj, handle)
+                        if result:
+                            return result
+
+            _rapidapi_debug.append("No profile extracted")
+        except Exception as e:
+            _rapidapi_debug.append(f"Exception: {e}")
+
+        # Store debug info for display
+        st.session_state['_ig_rapidapi_debug'] = _rapidapi_debug
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -3750,9 +3782,11 @@ with main_tab_social:
                 elif instagram_profile and instagram_profile.get('_source') == 'rapidapi':
                     st.success("✅ DEBUG: Instagram data fetched via RapidAPI")
                 elif instagram_profile and instagram_profile.get('status') == 'fetch_failed':
-                    st.warning(f"⚠️ DEBUG: RapidAPI key found but fetch failed. Response may have unexpected format.")
+                    debug_info = st.session_state.get('_ig_rapidapi_debug', [])
+                    st.warning(f"⚠️ DEBUG: RapidAPI key found but fetch failed. Debug: {' | '.join(debug_info)}")
                 else:
-                    st.info(f"ℹ️ DEBUG: IG result type: {type(instagram_profile)}, keys: {list(instagram_profile.keys()) if isinstance(instagram_profile, dict) else 'N/A'}")
+                    debug_info = st.session_state.get('_ig_rapidapi_debug', [])
+                    st.info(f"ℹ️ DEBUG: IG result keys: {list(instagram_profile.keys()) if isinstance(instagram_profile, dict) else 'N/A'} | RapidAPI debug: {' | '.join(debug_info)}")
 
         # Build reddit search terms from channel name + custom terms
         reddit_queries = []
@@ -4071,7 +4105,8 @@ with main_tab_social:
         with social_sub3:
             st.markdown(f"<div class='section-label'>▸ INSTAGRAM INTELLIGENCE // {ch1_name}</div>", unsafe_allow_html=True)
 
-            if instagram_profile:
+            ig_ok_tab = instagram_profile and instagram_profile.get('status') != 'fetch_failed' and 'followers' in instagram_profile
+            if ig_ok_tab:
                 ig = instagram_profile
                 st.markdown("<div class='social-panel'>", unsafe_allow_html=True)
                 st.markdown("<div class='section-label'>▸ INSTAGRAM PROFILE "
@@ -4218,9 +4253,10 @@ with main_tab_social:
             else:
                 st.markdown("<div class='social-panel'>", unsafe_allow_html=True)
                 if has_instagram:
-                    st.warning(f"Could not fetch Instagram profile for **{active_ig}**. "
-                               "Instagram may be blocking the request. For production use, integrate with "
-                               "Apify or PhantomBuster for reliable data extraction.")
+                    fetch_reason = ""
+                    if instagram_profile and instagram_profile.get('status') == 'fetch_failed':
+                        fetch_reason = f" Reason: {instagram_profile.get('reason', 'unknown')}"
+                    st.warning(f"Could not fetch Instagram profile for **{active_ig}**.{fetch_reason}")
                 else:
                     st.info("Enter an Instagram handle in the sidebar to enable Instagram intelligence.")
                 st.markdown("</div>", unsafe_allow_html=True)
