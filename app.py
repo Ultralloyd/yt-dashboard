@@ -1240,20 +1240,21 @@ def get_instagram_profile_data(handle, _rapidapi_key_hash=""):
             id_data = r1.json() if r1.status_code == 200 else {}
             _rapidapi_debug.append(f"Step1 keys={list(id_data.keys()) if isinstance(id_data, dict) else type(id_data)}")
 
-            # Extract user_id — try every common key pattern
+            # Extract user_id — try every common key pattern (case-insensitive)
             user_id = None
             if isinstance(id_data, dict):
-                user_id = (id_data.get('user_id')
-                           or id_data.get('id')
-                           or id_data.get('pk')
-                           or id_data.get('pk_id'))
+                # Build case-insensitive lookup
+                id_lower = {k.lower(): v for k, v in id_data.items()}
+                user_id = (id_lower.get('userid') or id_lower.get('user_id')
+                           or id_lower.get('id') or id_lower.get('pk') or id_lower.get('pk_id'))
                 # Check nested under 'data', 'user', 'result'
                 if not user_id:
                     for key in ('data', 'user', 'result'):
                         sub = id_data.get(key)
                         if isinstance(sub, dict):
-                            user_id = (sub.get('user_id') or sub.get('id')
-                                       or sub.get('pk') or sub.get('pk_id'))
+                            sub_lower = {k.lower(): v for k, v in sub.items()}
+                            user_id = (sub_lower.get('userid') or sub_lower.get('user_id')
+                                       or sub_lower.get('id') or sub_lower.get('pk'))
                             if user_id:
                                 break
 
