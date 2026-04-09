@@ -734,11 +734,22 @@ def fmt_num(n):
     return f"{n:,}"
 
 def extract_handle(text):
-    text = text.strip()
-    for pattern in [r'@[\w.\-]+', r'channel/(UC[\w\-]+)']:
-        m = re.search(pattern, text)
-        if m:
-            return m.group(0)
+    text = text.strip().rstrip('/')
+    # @handle anywhere in text
+    m = re.search(r'@[\w.\-]+', text)
+    if m:
+        return m.group(0)
+    # youtube.com/channel/UCxxxx
+    m = re.search(r'channel/(UC[\w\-]+)', text)
+    if m:
+        return m.group(1)
+    # youtube.com/@handle or youtube.com/c/name or youtube.com/name
+    m = re.search(r'youtube\.com/(?:c/|user/)?@?([\w.\-]+)', text)
+    if m:
+        name = m.group(1)
+        # Skip generic YouTube paths that aren't channel names
+        if name.lower() not in ('watch', 'feed', 'playlist', 'shorts', 'results', 'channel'):
+            return name
     return text
 
 
@@ -748,9 +759,22 @@ def get_channel_info(api_key, channel_input):
     handle = extract_handle(channel_input)
     try:
         channel_id = handle if handle.startswith('UC') else None
+        # Try forHandle lookup first (exact match, no search cost)
         if not channel_id:
-            q = handle.lstrip('@')
-            r = yt.search().list(part='snippet', q=q, type='channel', maxResults=1).execute()
+            clean = handle.lstrip('@')
+            r = yt.channels().list(part='snippet,statistics,contentDetails',
+                                   forHandle=clean).execute()
+            if r.get('items'):
+                return r['items'][0], r['items'][0]['id']
+        # Try forUsername lookup
+        if not channel_id:
+            r = yt.channels().list(part='snippet,statistics,contentDetails',
+                                   forUsername=clean).execute()
+            if r.get('items'):
+                return r['items'][0], r['items'][0]['id']
+        # Fallback to search
+        if not channel_id:
+            r = yt.search().list(part='snippet', q=clean, type='channel', maxResults=1).execute()
             if not r.get('items'):
                 return None
             channel_id = r['items'][0]['snippet']['channelId']
