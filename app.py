@@ -1206,12 +1206,13 @@ def get_tiktok_profile_data(handle):
 # ─────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_instagram_profile_data(handle):
+def get_instagram_profile_data(handle, _rapidapi_key_hash=""):
     """
     Fetch Instagram profile data.
     Strategy 1: RapidAPI Instagram scraper (if RAPIDAPI_KEY secret is set)
     Strategy 2-4: Direct scraping fallbacks (work locally, often blocked on cloud)
     Returns dict with followers/following/posts/bio or a status dict on failure.
+    _rapidapi_key_hash is used to bust cache when the key changes.
     """
     handle = handle.strip().lstrip('@')
     if not handle:
@@ -3740,7 +3741,18 @@ with main_tab_social:
 
         if has_instagram:
             with st.spinner("Fetching Instagram profile…"):
-                instagram_profile = get_instagram_profile_data(active_ig)
+                _rk_hash = str(hash(_get_secret("RAPIDAPI_KEY")))
+                instagram_profile = get_instagram_profile_data(active_ig, _rapidapi_key_hash=_rk_hash)
+                # Debug: show what happened
+                _rk = _get_secret("RAPIDAPI_KEY")
+                if not _rk:
+                    st.warning("⚠️ DEBUG: RAPIDAPI_KEY secret not found — check spelling in Streamlit secrets")
+                elif instagram_profile and instagram_profile.get('_source') == 'rapidapi':
+                    st.success("✅ DEBUG: Instagram data fetched via RapidAPI")
+                elif instagram_profile and instagram_profile.get('status') == 'fetch_failed':
+                    st.warning(f"⚠️ DEBUG: RapidAPI key found but fetch failed. Response may have unexpected format.")
+                else:
+                    st.info(f"ℹ️ DEBUG: IG result type: {type(instagram_profile)}, keys: {list(instagram_profile.keys()) if isinstance(instagram_profile, dict) else 'N/A'}")
 
         # Build reddit search terms from channel name + custom terms
         reddit_queries = []
