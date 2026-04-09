@@ -574,24 +574,64 @@ hr {
 
 
 # ─────────────────────────────────────────────────────────
+# PASSWORD GATE
+# ─────────────────────────────────────────────────────────
+def _get_secret(key, default=""):
+    """Retrieve a value from st.secrets, falling back to default."""
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError):
+        return default
+
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+if not st.session_state['authenticated']:
+    st.markdown("""
+<div style="max-width:420px;margin:4rem auto;text-align:center;">
+  <div style="font-family:'Orbitron',monospace;font-size:1.2rem;color:#00d4b4;
+              letter-spacing:0.15em;margin-bottom:1.5rem;
+              text-shadow:0 0 20px rgba(0,212,180,0.4);">
+    AUTHENTICATION REQUIRED
+  </div>
+</div>""", unsafe_allow_html=True)
+    col_l, col_mid, col_r = st.columns([1, 2, 1])
+    with col_mid:
+        pw = st.text_input("Enter access code", type="password", placeholder="access code")
+        if st.button("AUTHENTICATE", type="primary", use_container_width=True):
+            app_password = _get_secret("APP_PASSWORD", "")
+            if app_password and pw == app_password:
+                st.session_state['authenticated'] = True
+                st.rerun()
+            else:
+                st.error("Access denied.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Configuration")
 
-    yt_api_key     = st.text_input("YouTube Data API Key", type="password", placeholder="AIza...")
-    claude_api_key = st.text_input("Claude API Key",       type="password", placeholder="sk-ant-...")
+    yt_api_key     = st.text_input("YouTube Data API Key", type="password",
+                                    value=_get_secret("YT_API_KEY"), placeholder="AIza...")
+    claude_api_key = st.text_input("Claude API Key", type="password",
+                                    value=_get_secret("CLAUDE_API_KEY"), placeholder="sk-ant-...")
 
     st.markdown("---")
     st.markdown("### 🔍 Competitor Data *(optional)*")
-    dataforseo_login    = st.text_input("DataForSEO Login (email)", placeholder="you@email.com")
-    dataforseo_password = st.text_input("DataForSEO Password", type="password", placeholder="password")
+    dataforseo_login    = st.text_input("DataForSEO Login (email)",
+                                         value=_get_secret("DATAFORSEO_LOGIN"), placeholder="you@email.com")
+    dataforseo_password = st.text_input("DataForSEO Password", type="password",
+                                         value=_get_secret("DATAFORSEO_PASSWORD"), placeholder="password")
     st.caption("Adds real competitor channel metrics. Sign up at dataforseo.com — pay-as-you-go, ~$0.60/1000 searches.")
 
     st.markdown("---")
     st.markdown("### 📈 Growth Intelligence *(optional)*")
-    socialblade_client_id = st.text_input("SocialBlade Client ID", type="password", placeholder="client id")
-    socialblade_token     = st.text_input("SocialBlade Token",     type="password", placeholder="token")
+    socialblade_client_id = st.text_input("SocialBlade Client ID", type="password",
+                                           value=_get_secret("SOCIALBLADE_CLIENT_ID"), placeholder="client id")
+    socialblade_token     = st.text_input("SocialBlade Token", type="password",
+                                           value=_get_secret("SOCIALBLADE_TOKEN"), placeholder="token")
     st.caption("Subscriber trajectory, growth grade, earnings estimates. Get API keys at socialblade.com/developers")
 
     st.markdown("---")
