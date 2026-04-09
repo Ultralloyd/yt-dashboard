@@ -648,6 +648,23 @@ with st.sidebar:
                               help="Videos at or below this duration are treated as Shorts")
     st.caption(f"Cutoff = {secs_to_mmss(shorts_cutoff)} — adjust per channel type")
 
+    ignore_shorts = st.checkbox("🚫 IGNORE SHORTS",
+                                 value=st.session_state.get('ignore_shorts', False),
+                                 help="Filter out Shorts entirely — video limit applies to long-form only")
+
+    st.markdown("---")
+    st.markdown("### 📅 Date Window *(optional)*")
+    use_date_window = st.checkbox("Limit to date range",
+                                   value=st.session_state.get('use_date_window', False))
+    date_from = None
+    date_to = None
+    if use_date_window:
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            date_from = st.date_input("From", value=None)
+        with col_d2:
+            date_to = st.date_input("To", value=None)
+
     estimate_geo = st.checkbox("🌍 Estimate Audience Geography",
                                value=st.session_state.get('estimate_geo', False),
                                help="Proxy-based US vs International estimate using comment language, "
@@ -673,6 +690,10 @@ with st.sidebar:
         st.session_state['ch1']            = channel_1
         st.session_state['vid_limit']      = video_limit
         st.session_state['shorts_cutoff']  = shorts_cutoff
+        st.session_state['ignore_shorts']  = ignore_shorts
+        st.session_state['use_date_window'] = use_date_window
+        st.session_state['date_from']      = date_from
+        st.session_state['date_to']        = date_to
         st.session_state['estimate_geo']    = estimate_geo
         st.session_state['enable_social']  = enable_social
         st.session_state['tiktok_handle']  = tiktok_handle
@@ -2315,14 +2336,18 @@ if not claude_api_key:
     st.stop()
 
 # Use session-stored values so inner buttons don't lose context
-active_ch1    = st.session_state.get('ch1', channel_1)
-active_limit  = st.session_state.get('vid_limit', video_limit)
-active_cutoff = st.session_state.get('shorts_cutoff', shorts_cutoff)
-active_geo    = st.session_state.get('estimate_geo', estimate_geo)
-active_tiktok = st.session_state.get('tiktok_handle', tiktok_handle)
-active_reddit = st.session_state.get('reddit_terms', reddit_search_terms)
-active_ig     = st.session_state.get('ig_handle', instagram_handle)
-active_social = st.session_state.get('enable_social', enable_social)
+active_ch1         = st.session_state.get('ch1', channel_1)
+active_limit       = st.session_state.get('vid_limit', video_limit)
+active_cutoff      = st.session_state.get('shorts_cutoff', shorts_cutoff)
+active_ignore_shorts = st.session_state.get('ignore_shorts', ignore_shorts)
+active_date_window = st.session_state.get('use_date_window', use_date_window)
+active_date_from   = st.session_state.get('date_from', date_from)
+active_date_to     = st.session_state.get('date_to', date_to)
+active_geo         = st.session_state.get('estimate_geo', estimate_geo)
+active_tiktok      = st.session_state.get('tiktok_handle', tiktok_handle)
+active_reddit      = st.session_state.get('reddit_terms', reddit_search_terms)
+active_ig          = st.session_state.get('ig_handle', instagram_handle)
+active_social      = st.session_state.get('enable_social', enable_social)
 
 if not active_ch1.strip():
     st.error("Please enter at least one channel.")
@@ -2338,6 +2363,19 @@ has_instagram  = active_social and bool(active_ig and active_ig.strip())
 # ─────────────────────────────────────────────────────────
 # LOAD CHANNEL DATA
 # ─────────────────────────────────────────────────────────
+def _is_short(v, cutoff):
+    """Check if a video dict qualifies as a Short."""
+    dur_secs = (v.get('duration_min') or 0) * 60
+    title    = str(v.get('title','')).lower()
+    tags_str = ' '.join(v.get('tags', [])).lower() if v.get('tags') else ''
+    if dur_secs <= cutoff:
+        return True
+    if '#shorts' in title or '#short' in title:
+        return True
+    if '#shorts' in tags_str or '#short' in tags_str:
+        return True
+    return False
+
 channel_data = {}
 with st.spinner(f"Loading {active_ch1}…"):
     result = get_channel_info(yt_api_key, active_ch1)
@@ -2346,10 +2384,34 @@ with st.spinner(f"Loading {active_ch1}…"):
         st.stop()
     ch_info, ch_id = result
     ch_name = ch_info['snippet']['title']
+    # Fetch extra videos when ignoring shorts so we still hit the desired long-form count
+    fetch_limit = active_limit * 3 if active_ignore_shorts else active_limit
+    all_videos = get_channel_videos(yt_api_key, ch_id, min(fetch_limit, 150))
+
+    # Apply date window filter
+    if active_date_window and (active_date_from or active_date_to):
+        filtered = []
+        for v in all_videos:
+            try:
+                pub = pd.to_datetime(v.get('published_at')).date()
+                if active_date_from and pub < active_date_from:
+                    continue
+                if active_date_to and pub > active_date_to:
+                    continue
+                filtered.append(v)
+            except Exception:
+                filtered.append(v)
+        all_videos = filtered
+
+    # Apply ignore-shorts filter and cap at requested limit
+    if active_ignore_shorts:
+        all_videos = [v for v in all_videos if not _is_short(v, active_cutoff)]
+    all_videos = all_videos[:active_limit]
+
     channel_data[ch_name] = {
         'info':       ch_info,
         'channel_id': ch_id,
-        'videos':     get_channel_videos(yt_api_key, ch_id, active_limit)
+        'videos':     all_videos
     }
 
 if not channel_data:
